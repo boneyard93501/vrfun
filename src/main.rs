@@ -19,6 +19,7 @@ use std::convert::TryInto;
 use ecvrf::{keygen, prove, verify, VrfPk, VrfProof, VrfSk};
 //  https://docs.rs/ecvrf/0.4.3/src/ecvrf/lib.rs.html#32
 use marine_rs_sdk::{marine, module_manifest, WasmLoggerBuilder};
+use zeroize::Zeroize;
 
 module_manifest!();
 
@@ -40,11 +41,87 @@ pub struct VerificationResult {
 }
 
 #[marine]
-fn vrf_proof(payload: Vec<u8>) -> ProofResult {
+pub struct KeyPair {
+    pub pk: Vec<u8>,
+    pub sk: Vec<u8>,
+}
+
+#[marine]
+// #[derive(Default)]
+pub fn gen_keys() -> KeyPair {
     let (sk, pk) = keygen();
-    let (output, proof) = prove(&payload, &sk);
-    ProofResult {
+    KeyPair {
         pk: pk.to_bytes().to_vec(),
+        sk: sk.to_bytes().to_vec(),
+    }
+}
+
+impl Default for KeyPair {
+    fn default() -> Self {
+        KeyPair {
+            pk: Vec::new(),
+            sk: Vec::new(),
+        }
+    }
+}
+
+fn err_func(e: &str) -> ProofResult {
+    ProofResult {
+        pk: vec![],
+        proof: vec![],
+        output: vec![],
+        stderr: format!("failed to process {}", e),
+    }
+}
+
+#[marine]
+fn vrf_proof(payload: Vec<u8>, sk: &Vec<u8>) -> ProofResult {
+    let mut keys: KeyPair = Default::default();
+    let mut _sk: [u8; 32] = Default::default();
+
+    if sk.len() == 0 {
+        keys = gen_keys();
+        _sk = match keys.sk.try_into() {
+            Ok(sk) => sk,
+            Err(e) => {
+                let s = std::str::from_utf8(&e).expect("failed to generate sk");
+                return err_func(s);
+            }
+        }
+    } else {
+        let _sk: [u8; 32] = match sk[..].try_into() {
+            Ok(sk) => sk,
+            Err(e) => {
+                return ProofResult {
+                    pk: vec![],
+                    proof: vec![],
+                    output: vec![],
+                    stderr: e.to_string(),
+                };
+            }
+        };
+
+        let t_sk: VrfSk = match VrfSk::from_bytes(&_sk) {
+            Ok(sk) => sk,
+            Err(e) => {
+                return ProofResult {
+                    pk: vec![],
+                    proof: vec![],
+                    output: vec![],
+                    stderr: e.to_string(),
+                };
+            }
+        };
+
+        let _pk: VrfPk = VrfPk::new(&t_sk);
+        keys.pk = _pk.to_bytes().to_vec();
+        // keys.sk = _sk[..].try_into().unwrap();
+    }
+    let (output, proof) = prove(&payload, &VrfSk::from_bytes(&_sk).unwrap());
+    _sk.zeroize();
+
+    ProofResult {
+        pk: keys.pk,
         proof: proof.to_bytes().to_vec(),
         output: output.to_vec(),
         stderr: "".to_string(),
@@ -132,10 +209,18 @@ mod tests {
         assert_eq!(result.proof.len(), 96);
     }
     */
+
+    #[marine_test(config_path = "../configs/Config.toml", modules_dir = "../artifacts")]
+    fn t_key_gen(vrfun: marine_test_env::vrfun::ModuleInterface) {
+        let keys = vrfun.gen_keys();
+        assert_eq!(keys.pk.len(), 32);
+        assert_eq!(keys.sk.len(), 32);
+    }
+
     #[marine_test(config_path = "../configs/Config.toml", modules_dir = "../artifacts")]
     fn test_proof_module(vrfun: marine_test_env::vrfun::ModuleInterface) {
         let payload = vec![0xde, 0xad, 0xbe, 0xef];
-        let result = vrfun.vrf_proof(payload.clone());
+        let result = vrfun.vrf_proof(payload.clone(), vec![]);
 
         assert_eq!(result.pk.len(), 32);
         assert_eq!(result.output.len(), 32);
@@ -143,9 +228,9 @@ mod tests {
     }
 
     #[marine_test(config_path = "../configs/Config.toml", modules_dir = "../artifacts")]
-    fn verify_proof_module(vrfun: marine_test_env::vrfun::ModuleInterface) {
+    fn verify_proof_module_no_sk(vrfun: marine_test_env::vrfun::ModuleInterface) {
         let payload = vec![0xde, 0xad, 0xbe, 0xef];
-        let result = vrfun.vrf_proof(payload.clone());
+        let result = vrfun.vrf_proof(payload.clone(), vec![]);
 
         let verified = vrfun.verify_vrf(
             result.pk.clone().to_vec(),
@@ -164,5 +249,32 @@ mod tests {
             result.proof.to_vec(),
         );
         assert!(!verified.verified);
+    }
+
+    #[marine_test(config_path = "../configs/Config.toml", modules_dir = "../artifacts")]
+    fn verify_proof_module_with_sk(vrfun: marine_test_env::vrfun::ModuleInterface) {
+        let payload = vec![0xde, 0xad, 0xbe, 0xef];
+        let keypair = vrfun.gen_keys();
+        let result = vrfun.vrf_proof(payload.clone(), keypair.sk.clone());
+
+        /*
+        let verified = vrfun.verify_vrf(
+            result.pk.clone().to_vec(),
+            payload.clone().to_vec(),
+            result.output.clone().to_vec(),
+            result.proof.clone().to_vec(),
+        );
+        assert_eq!(verified.stderr, "".to_string());
+        assert!(verified.verified);
+
+        let bad_payload = vec![0xde, 0xad, 0xbe, 0xed];
+        let verified = vrfun.verify_vrf(
+            result.pk.to_vec(),
+            bad_payload.to_vec(),
+            result.output.to_vec(),
+            result.proof.to_vec(),
+        );
+        assert!(!verified.verified);
+        */
     }
 }
