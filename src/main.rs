@@ -1,19 +1,3 @@
-/*
- * Copyright 2021 Fluence Labs Limited
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-
 use std::convert::TryInto;
 
 use ecvrf::{keygen, prove, verify, VrfPk, VrfProof, VrfSk};
@@ -41,6 +25,7 @@ pub struct VerificationResult {
 }
 
 #[marine]
+#[derive(Default, Debug)]
 pub struct KeyPair {
     pub pk: Vec<u8>,
     pub sk: Vec<u8>,
@@ -50,18 +35,10 @@ pub struct KeyPair {
 // #[derive(Default)]
 pub fn gen_keys() -> KeyPair {
     let (sk, pk) = keygen();
+
     KeyPair {
         pk: pk.to_bytes().to_vec(),
         sk: sk.to_bytes().to_vec(),
-    }
-}
-
-impl Default for KeyPair {
-    fn default() -> Self {
-        KeyPair {
-            pk: Vec::new(),
-            sk: Vec::new(),
-        }
     }
 }
 
@@ -89,7 +66,7 @@ fn vrf_proof(payload: Vec<u8>, sk: &Vec<u8>) -> ProofResult {
             }
         }
     } else {
-        let _sk: [u8; 32] = match sk[..].try_into() {
+        _sk = match sk[..].try_into() {
             Ok(sk) => sk,
             Err(e) => {
                 return ProofResult {
@@ -100,7 +77,6 @@ fn vrf_proof(payload: Vec<u8>, sk: &Vec<u8>) -> ProofResult {
                 };
             }
         };
-
         let t_sk: VrfSk = match VrfSk::from_bytes(&_sk) {
             Ok(sk) => sk,
             Err(e) => {
@@ -115,8 +91,8 @@ fn vrf_proof(payload: Vec<u8>, sk: &Vec<u8>) -> ProofResult {
 
         let _pk: VrfPk = VrfPk::new(&t_sk);
         keys.pk = _pk.to_bytes().to_vec();
-        // keys.sk = _sk[..].try_into().unwrap();
     }
+
     let (output, proof) = prove(&payload, &VrfSk::from_bytes(&_sk).unwrap());
     _sk.zeroize();
 
@@ -195,20 +171,7 @@ fn verify_vrf(
 
 #[cfg(test)]
 mod tests {
-    // use super::*;
     use marine_rs_sdk_test::marine_test;
-
-    /*
-    #[test]
-    fn test_proof_code() {
-        let payload = vec![0xde, 0xad, 0xbe, 0xef];
-        let result: ProofResult = vrf_proof(payload.clone());
-
-        assert_eq!(result.pk.len(), 32);
-        assert_eq!(result.output.len(), 32);
-        assert_eq!(result.proof.len(), 96);
-    }
-    */
 
     #[marine_test(config_path = "../configs/Config.toml", modules_dir = "../artifacts")]
     fn t_key_gen(vrfun: marine_test_env::vrfun::ModuleInterface) {
@@ -238,31 +201,29 @@ mod tests {
             result.output.clone().to_vec(),
             result.proof.clone().to_vec(),
         );
+
         assert_eq!(verified.stderr, "".to_string());
         assert!(verified.verified);
 
         let bad_payload = vec![0xde, 0xad, 0xbe, 0xed];
-        let verified = vrfun.verify_vrf(
-            result.pk.to_vec(),
-            bad_payload.to_vec(),
-            result.output.to_vec(),
-            result.proof.to_vec(),
-        );
+        let verified = vrfun.verify_vrf(result.pk, bad_payload, result.output, result.proof);
         assert!(!verified.verified);
     }
 
     #[marine_test(config_path = "../configs/Config.toml", modules_dir = "../artifacts")]
     fn verify_proof_module_with_sk(vrfun: marine_test_env::vrfun::ModuleInterface) {
-        let payload = vec![0xde, 0xad, 0xbe, 0xef];
+        // let payload = vec![0xde, 0xad, 0xbe, 0xef];
+        let payload = vec![222, 173, 190, 239];
         let keypair = vrfun.gen_keys();
-        let result = vrfun.vrf_proof(payload.clone(), keypair.sk.clone());
 
-        /*
+        let result = vrfun.vrf_proof(payload.clone(), keypair.sk.clone());
+        assert_eq!(&keypair.pk, &result.pk);
+
         let verified = vrfun.verify_vrf(
-            result.pk.clone().to_vec(),
-            payload.clone().to_vec(),
-            result.output.clone().to_vec(),
-            result.proof.clone().to_vec(),
+            result.pk.clone(),
+            payload,
+            result.output.clone(),
+            result.proof.clone(),
         );
         assert_eq!(verified.stderr, "".to_string());
         assert!(verified.verified);
@@ -275,6 +236,5 @@ mod tests {
             result.proof.to_vec(),
         );
         assert!(!verified.verified);
-        */
     }
 }
